@@ -1,0 +1,461 @@
+---
+title: "Analysis of clients' behavior in using credit cards"
+author: "Elena Koroleva"
+date: "12 September 2021"
+output: html_document
+---
+
+## Business task
+Improve customer experience in using credit cards.
+For that we will divide customers into groups and adapt bank services based on a group behavior
+
+## Datasource description
+
+Public datasets available on Kaggle: <https://www.kaggle.com/arjunbhasin2013/ccdata>
+
+Licence: CC0: Public Domain
+
+Dataset includes characteristics (18 variables) of 9000 active credit card holders during the last 6 months.
+Variables: 
+
+* CUSTID : Identification of Credit Card holder
+* BALANCE : Balance amount left in their account to make purchases
+* BALANCEFREQUENCY : How frequently the Balance is updated, score between 0 and 1 (1 = frequently updated, 0 = not frequently updated)
+* PURCHASES : Amount of purchases made from account
+* ONEOFFPURCHASES : Maximum purchase amount done in one-go
+* INSTALLMENTSPURCHASES : Amount of purchase done in installment
+* CASHADVANCE : Cash in advance given to the user
+* PURCHASESFREQUENCY : How frequently the Purchases are being made, score between 0 and 1 (1 = frequently purchased, 0 = not frequently purchased)
+* ONEOFFPURCHASESFREQUENCY : How frequently Purchases are happening in one-go (1 = frequently purchased, 0 = not frequently purchased)
+* PURCHASESINSTALLMENTSFREQUENCY : How frequently purchases in installments are being done (1 = frequently done, 0 = not frequently done)
+* CASHADVANCEFREQUENCY : How frequently the cash in advance being paid
+* CASHADVANCETRX : Number of Transactions made with "Cash in Advanced"
+* PURCHASESTRX : Numbe of purchase transactions made
+* CREDITLIMIT : Limit of Credit Card for user
+* PAYMENTS : Amount of Payment done by user
+* MINIMUM_PAYMENTS : Minimum amount of payments made by user
+* PRCFULLPAYMENT : Percent of full payment paid by user
+* TENURE : Tenure of credit card service for user
+
+*In our analysis we will assume that data is not biased, which means that it was randomly generated and includes information about different clients in terms of gender, age, income, marital status, etc* 
+
+## Data cleaning and organization
+### 1. Import of libraries and files
+```{r include=FALSE}
+library(factoextra)
+library(tidyverse)
+library(skimr)
+library(readr)
+library(dplyr)
+library(corrplot)
+library(gplots)
+library(cluster)
+library(fmsb)
+library(RColorBrewer)
+```
+
+```{r}
+data <- read.csv('/Users/korol/Documents/CC GENERAL.csv')
+```
+
+
+### 2. Data errors check
+```{r}
+glimpse(data)
+```
+
+```{r}
+print(paste("duplicates in the file", sum(duplicated(data))))
+print(paste("NA values in the file", sum(is.na(data))))
+summary(data)
+```
+
+
+No duplicates in our dataset. However, we have 1 missing value in credit limit and 313 in minimum payments
+
+### 3. Data cleaning
+#### Credit limit: delete the line with NA value
+
+```{r}
+data_t <- drop_na(data,CREDIT_LIMIT)
+```
+
+#### Filling NA values for MINIMUM_PAYMENTS:
+
+Find a median and mean values:
+```{r}
+data_calcul <- drop_na(data_t,MINIMUM_PAYMENTS)
+mean_limit <- mean(data_calcul$MINIMUM_PAYMENTS)
+median_limit <- median(data_calcul$MINIMUM_PAYMENTS)
+```
+
+Density graph wthout NA values:
+```{r}
+ggplot(data=data_t,aes(x=MINIMUM_PAYMENTS))+geom_density(fill="#69b3a2", color="#e9ecef", alpha=0.9)+
+  labs(title = "Minimum payment distribution")
+```
+
+Density graph with NA filled with mean:
+```{r}
+data_r_mean <- mutate(data_t, MINIMUM_PAYMENTS = ifelse(is.na(MINIMUM_PAYMENTS), mean_limit, MINIMUM_PAYMENTS))
+summary(data_r_mean) 
+ggplot(data=data_r_mean,aes(x=MINIMUM_PAYMENTS))+geom_density(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Minimum payment distribution")
+```
+
+
+Density graph with NA filled with median:
+```{r}
+data_r_median <- mutate(data_t, MINIMUM_PAYMENTS = ifelse(is.na(MINIMUM_PAYMENTS), median_limit, MINIMUM_PAYMENTS))
+summary(data_r_median) 
+ggplot(data=data_r_median,aes(x=MINIMUM_PAYMENTS))+geom_density(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Minimum payment distribution")
+```
+
+
+As we can see median affects less the distribution, so to avoid misleading results we will replace missing values with mean values
+
+## Analysis of variable and outliers detection:
+In this section we will review the variables and remove outliers
+
+
+BALANCE - Balance amount left on the bank account:
+
+```{r}
+ggplot(data=data_r_mean,aes(x=BALANCE))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Balance distribution")+
+  ylab("Number of accounts")
+```
+
+```{r}
+boxplot(data_r_mean$BALANCE)
+```
+
+We can see significat number of outliers. This can negatively affect our analysis, so we will reduce its number
+
+```{r}
+def <- function(x){
+  quantiles <- quantile( x, c(.05, .95 ) )
+  x[ x < quantiles[1] ] <- quantiles[1]
+  x[ x > quantiles[2] ] <- quantiles[2]
+  x
+}
+data_r_mean$BALANCE <- def( data_r_mean$BALANCE )
+```
+
+
+Overall, we can see that the distribution of BALANCE variable is skewed right. Which give us an idea that most of owners of the credit cards have not so high balance on the card.
+
+BALANCE_FREQUENCY - How frequently the Balance is updated, score between 0 and 1 (1 = frequently updated, 0 = not frequently updated)
+```{r}
+ggplot(data=data_r_mean,aes(x=BALANCE_FREQUENCY))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8,binwidth =0.2)+
+  labs(title = "Balance frequency update distribution")+
+  ylab("Number of accounts")
+```
+
+Majority of accounts are being updated quite often. And taken into consideration the previous result, we can make an aasumption that users operate with small amounts.
+
+PURCHASES - Amount of purchases made from account
+```{r}
+ggplot(data=data_r_mean,aes(x=PURCHASES))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Amount of purchases distribution")+
+  ylab("Number of accounts")
+```
+
+```{r}
+boxplot(data_r_mean$PURCHASES)
+```
+
+We can also notice outliers, which should be removed.
+```{r}
+data_r_mean$PURCHASES <- def( data_r_mean$PURCHASES )
+```
+
+The distribution on purchases amounts shows us that the assumption we made make sence. Clients do not do big purchases (or do but not so often).
+
+ONEOFF_PURCHASES - Maximum purchase amount done in one-go
+```{r}
+
+ggplot(data=data_r_mean,aes(x=ONEOFF_PURCHASES))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Amount of purchases in one-go distribution")+
+  ylab("Number of accounts")
+
+```
+```{r}
+boxplot(data_r_mean$ONEOFF_PURCHASES)
+```
+```{r}
+data_r_mean$ONEOFF_PURCHASES <- def( data_r_mean$ONEOFF_PURCHASES )
+```
+
+We can see a quite similar situation as we saw on purchase distribution graph. However, this can mean different users' behavior: some people make purchases rare, but spend a lot, others prefer to do a lot of small purchases.
+It will be clear when we will check a heatmap
+
+INSTALLMENTS_PURCHASES - Amount of purchase done in installment
+```{r}
+ggplot(data=data_r_mean,aes(x=INSTALLMENTS_PURCHASES))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Amount of purchases in installment distribution")+
+  ylab("Number of accounts")
+```
+```{r}
+boxplot(data_r_mean$INSTALLMENTS_PURCHASES)
+```
+```{r}
+data_r_mean$INSTALLMENTS_PURCHASES <- def( data_r_mean$INSTALLMENTS_PURCHASES )
+```
+
+According to the distribution, not too many our clients use this way of payment. However, we can make a hypothesis that clients who spend a lot in one-go, use this option more often than the one who buys more often, but on a small amount.
+
+CASH_ADVANCE - Cash in advance given to the user
+```{r}
+ggplot(data=data_r_mean,aes(x=CASH_ADVANCE))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Amount of purchases (loan) distribution")+
+  ylab("Number of accounts")
+```
+```{r}
+boxplot(data_r_mean$CASH_ADVANCE)
+```
+```{r}
+data_r_mean$CASH_ADVANCE <- def( data_r_mean$CASH_ADVANCE )
+```
+
+As we can see some of our clients use the option of "payment by the given cash". Plus, we can notice that the amount spent are quite high. It can depend on the fact that loan money people use mostly on expensive purchases.
+
+PURCHASES_FREQUENCY - How frequently the Purchases are being made
+```{r}
+ggplot(data=data_r_mean,aes(x=PURCHASES_FREQUENCY))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8,binwidth =0.15)+
+  labs(title = "Frequency of purchases distribution")+
+  ylab("Number of accounts")
+```
+
+According to this distribution frequency of purchases is different from one client to another. Some of them make purchases quite often, other ones very rare.
+It can depend on Purchase amount. We will check this hypothesis on the heatmap.
+
+ONEOFF_PURCHASES_FREQUENCY - How frequently Purchases are happening in one-go
+```{r}
+ggplot(data=data_r_mean,aes(x=ONEOFF_PURCHASES_FREQUENCY))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8,binwidth =0.15)+
+  labs(title = "One-go purchases frequency distribution")+
+  ylab("Number of accounts")
+```
+
+As we can see majority of card owners do not make purchases in one-go. This can be a good insight in terms of what clients are buying. For example, if clients would use credit cards mostly for purchases of something valuable we could see that frequency would be quite high. However, our clients use credit cards for ordinary purchases as well.
+
+PURCHASES_INSTALLMENTS_FREQUENCY - How frequently purchases in installments are being done
+```{r}
+ggplot(data=data_r_mean,aes(x=PURCHASES_INSTALLMENTS_FREQUENCY))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8,binwidth =0.15)+
+  labs(title = "Purchases in installement frequency distribution")+
+  ylab("Number of accounts")
+```
+
+Clearly there are different types of credit owners can be spotted: majority does not buy in installments, however, there is clearly a group who is using this option
+
+CASH_ADVANCE_FREQUENCY - How frequently the cash in advance being paid
+```{r}
+ggplot(data=data_r_mean,aes(x=CASH_ADVANCE_FREQUENCY))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8,binwidth =0.15)+
+  labs(title = "Cash in advance frequency payment distribution")+
+  ylab("Number of accounts")
+```
+
+As we can see our clients do not use often the cash borrowed against the credit limit. Which can give us an idea that most customers use credit cards as a debit one. This can be improved with a new customer relationship strategy
+
+
+PURCHASESTRX  -  Numbe of purchase transactions made
+
+```{r}
+ggplot(data=data_r_mean,aes(x=PURCHASES_TRX ))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Number of transactions distribution")+
+  ylab("Number of accounts")
+```
+
+We can notice that some accounts stay inactive. Probably the bank should "wake up" the users by organizing a marketing campaign
+
+
+CREDIT_LIMIT  -  Limit of Credit Card for user
+```{r}
+ggplot(data=data_r_mean,aes(x=CREDIT_LIMIT ))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Credit card limit distribution")+
+  ylab("Number of accounts")
+boxplot(data_r_mean$CREDIT_LIMIT)
+data_r_mean$CREDIT_LIMIT <- def( data_r_mean$CREDIT_LIMIT )
+```
+
+We can see a quite common picture: there a lot of users with quite low credit card limit, as well as the one with quite a high one. 
+The credit limit usually depends on the income of the user and card type
+
+PRC_FULL_PAYMENT - Percent of full payment paid by user
+```{r}
+ggplot(data=data_r_mean,aes(x=PRC_FULL_PAYMENT ))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8, binwidth =0.15 )+
+  labs(title = "Percent of full payment paid distribution")+
+  ylab("Number of accounts")
+```
+
+As we can see there are still a lot of payments which were not payed by users. Probably they would need some notification or any other reminders about their debt. This can be also one of the reasons why customers avoid cash in advance option.
+
+
+PAYMENTS  -  Amount of Payment done by user
+```{r}
+ggplot(data=data_r_mean,aes(x=PAYMENTS ))+geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.8)+
+  labs(title = "Amount of payment distribution")+
+  ylab("Number of accounts")
+boxplot(data_r_mean$PAYMENTS)
+data_r_mean$PAYMENTS <- def( data_r_mean$PAYMENTS )
+```
+
+According to payment distribution, some users stay inactive, what proves us the necessity of changing of the marketing campaign. 
+
+All connections can be displayed in the correlation matrix:
+
+Correlation matrix
+```{r}
+df<- select (data_r_mean,-c(CUST_ID))
+correlation<-cor(df)
+corrplot(correlation, method="circle",tl.cex = 0.5,tl.srt = 30)
+```
+
+
+## Data modeling: Clustering of users
+Now, after we analyzed the variables and removed all outliers, we can move to the next step - division of users into the groups.
+We will try 2 methods: k-means and agglomerative clustering (hierarchy)
+
+### First step: decrease number of dimensions
+In order our clustering method to work better, we should reduce number of dimensions. For that we will use PCA method.
+```{r}
+pca <- prcomp(df, scale = TRUE)
+fviz_eig(pca)
+```
+
+According to the graph first 2 components describe around 50% of data, however this is not enough for us. We will use 9 components in order to reach 90% of data description. 
+
+```{r}
+summary(pca)
+```
+
+```{r}
+pca$rotation[,1:9]
+```
+
+```{r}
+colMain <- colorRampPalette(brewer.pal(8, "Blues"))(25)
+heatmap(pca$rotation[,1:9],Colv=NA, Rowv=NA, scale='none',col=colMain)
+```
+
+On the graph we can see composition of each principal component.  
+
+```{r}
+pca_df <- cbind(df[0],pca$x[,1:9])
+```
+
+### Second step: indentification of optimal number of clusters for each model
+
+We will use Elbow method to define optimal number of clusters:
+```{r}
+fviz_nbclust(pca_df, kmeans, method = "wss")
+```
+
+As we can see 5 clusters looks like an optimal value for k-means method
+
+
+```{r}
+fviz_nbclust(pca_df, hcut, method = "wss")
+```
+
+We will use also 5 clusters.
+
+### Third step: clustering implementation
+K-means:
+```{r}
+km.res <- eclust(pca_df, "kmeans", k = 5,
+                 nstart = 25, graph = FALSE)
+```
+
+Agglomerative clustering (single-linkage method)
+```{r}
+res.hc <- eclust(pca_df, "hclust", k = 5,
+                 method = "single", graph = FALSE) 
+```
+
+```{r}
+print(res.hc)
+```
+
+### Fourth step: model quality check
+We will use silhouette score:
+
+Check model quality for K-means:
+```{r}
+fviz_silhouette(km.res)
+```
+
+Check model quality for Agglomerative clustering:
+
+```{r}
+fviz_silhouette(res.hc)
+```
+
+According to the silhouette score K-means does clustering better than Agglomerative clustering method.
+
+## Interpretation of the results:
+We will use for result interpretation better model: K-means
+
+First we will see at the composition of each cluster:
+```{r}
+cluster <- c(1: 5)
+center <- km.res$centers
+center_df <- data.frame(cluster, center)
+center_reshape <- gather(center_df, features, values,PC1:PC9)
+center_reshape
+```
+
+```{r}
+ggplot(data = center_reshape, aes(x = features, y = cluster, fill = values)) +
+  scale_y_continuous(breaks = seq(1, 7, by = 1)) +
+  geom_tile() +
+  coord_equal() +
+  theme_classic()
+```
+    
+  On the graph we can see that overall components PC4, PC5, PC6, PC7, PC8, PC9 have quite similar values for each cluster. The main difference among them is restricted in components PC1, PC2, PC3. That is why we will focus on them.
+
+*Cluster 1:*  Economical
+
+These clients have low income. They buy rarely and little. However, when they want to buy something, they use installment or cash in advance payment methods. They do not borrow too much.
+However, the bank should pay attention to them, as they often do not pay off the debt on the credit card.
+
+*Cluster 2:* Restricted
+
+Clients of this group also earn a little, but they make a lot of purchases. They rarely use loans and mostly spend their own funds. They do not often buy something in one go, usually they spend often but a small amounts
+
+
+*Cluster 3:* Opportunists
+
+This cluster has the poorest customers. However, they shop quite often. They often pay for purchases with borrowed funds. They are somewhere between cluster 1 and 2.
+
+*Cluster 4:* Middle class
+
+Clients of this cluster have an average income and make purchases quite rarely. However, if they do decide to buy, they spend a lot. They often pay with borrowed funds.
+It should be noted separately that these clients also have a high level of debt.
+
+*Cluster 5:* Wealthy clients
+
+These clients are very wealthy and spend a lot. They buy both in one go and in the usual way. These clients rarely use borrowed funds, but if they do, they regularly pay off the debt.
+
+## Recommendations:
+
+* **For Economical:** 
+Economical class does not use often the credit cards. Our main goal is to wake them up. For that the bank should send them more often the marketing propositions from their partners: promotions, discounts, etc. in order to  encourage them to buy. 
+Another way to wake them up is to propose a cashback. For someone who does not earn much, it could be a great opportunity to save money
+
+* **For Restricted:**
+Clients of this group buy a lot, but pay with their own money. One of the possible reasons can be a fear to have a loan. Probably for them the mechanism of repayment is not clear enough. One of potential solutions can be an integration of instructions in the bank application and user friendly interface, where they can see clearly how the payments will be taken.
+Plus bank workers can call these clients from time to time to check if they have all necessary information
+
+* **For Opportunists:**
+Opportunists are already buying a lot. Their main problem is paying for borrowing money. As we can see it is very hard for them to return back the loan. That is why one of the potential solutions can be a proposition of a loan in order to cover the amount borrowed with the card. At the same time, these clients would appreciate if the payment period could be increased.
+
+* **For Middle class:**
+These clients are using the card only for buying something expensive and do not use it on a dayily basis. Strategy of communication with these clients should be based on two things: convince them that the credit card can be used as a debit one and help them to pay their debts on time. As for the first problem, the bank should provide them a clear explanation how the card works (in the application, by phone, in the office). The system should be clear and prevent customers when they are about to exceed the credit limit, in order to avoid misunderstanding. As for the second problem, the bank can propose clients to set up automatic payments to cover their debt from their salary and notification can also serve in this situation
+
+
+* **For Wealthy clients:**
+Wealthy clients use credit card as a debit one. Due to the high credit limit they are rarely exceeding it. The bank can encourage them to make costly purchases by sending propositions from their partners. However, the proposition should be adapted to the client profile.
+Here we would need to dive deeper and analyze their preferences. For example, we can check where they usually eat, what they like to do, etc. Analysis should help us to identify their needs. After that clients can be classified into groups and have their own newsletter with recommendations
